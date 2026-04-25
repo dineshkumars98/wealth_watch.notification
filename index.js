@@ -20,29 +20,28 @@ if (!admin.apps.length) {
 }
 
 app.post('/send-notification', async (req, res) => {
-  const { token, title, body } = req.body;
-
-  if (!token || !title || !body) {
-    return res.status(400).send('Missing token, title, or body');
-  }
-
-  const payload = {
-    token: token,
-    notification: {
-      title: title,
-      body: body,
-    },
-  };
-
   try {
-    const response = await admin.messaging().send(payload);
-    console.log("Successfully sent message:", response);
-    res.status(200).send({ success: true, messageId: response });
+    // 1. Extract the 'data' field from the incoming Flutter request
+    const { token, title, body, data } = req.body;
+
+    const message = {
+      token: token,
+      notification: {
+        title: title,
+        body: body
+      },
+      // 2. IMPORTANT: Forward the data object to Firebase!
+      data: data
+    };
+
+    const response = await admin.messaging().send(message);
+    res.status(200).send({ success: true, response });
   } catch (error) {
     console.error("Error sending message:", error);
     res.status(500).send({ success: false, error: error.message });
   }
 });
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
