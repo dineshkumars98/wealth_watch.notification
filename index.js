@@ -65,16 +65,38 @@ app.post('/send-notification', authenticate, async (req, res) => {
   }
 });
 
-// Endpoint to store user details (Firestore Persistence)
+// Endpoint to store user details (Firestore Persistence with Duplicate Checking)
 app.post('/store-user', async (req, res) => {
   try {
     const { uid, name, email, phoneNumber, fcmToken, ...otherDetails } = req.body;
 
-    if (!uid || !name || !fcmToken) {
+    // 1. Validate Mandatory Fields
+    if (!uid || !name || !fcmToken || (!email && !phoneNumber)) {
       return res.status(400).send({ 
         success: false, 
-        error: "Missing required fields: uid, name, and fcmToken are mandatory." 
+        error: "Missing required fields: uid, name, fcmToken, and at least one identity (email or phoneNumber) are mandatory." 
       });
+    }
+
+    // 2. Duplicate Checking Logic
+    const usersRef = db.collection('users');
+    
+    // Check Email Duplicate
+    if (email) {
+      const emailQuery = await usersRef.where('email', '==', email).get();
+      const duplicate = emailQuery.docs.find(doc => doc.id !== uid);
+      if (duplicate) {
+        return res.status(409).send({ success: false, error: "A user with this email already exists." });
+      }
+    }
+
+    // Check Phone Number Duplicate
+    if (phoneNumber) {
+      const phoneQuery = await usersRef.where('phoneNumber', '==', phoneNumber).get();
+      const duplicate = phoneQuery.docs.find(doc => doc.id !== uid);
+      if (duplicate) {
+        return res.status(409).send({ success: false, error: "A user with this phone number already exists." });
+      }
     }
 
     const userData = {
@@ -87,16 +109,39 @@ app.post('/store-user', async (req, res) => {
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
-    // Save to Firestore 'users' collection
-    await db.collection('users').doc(uid).set(userData, { merge: true });
+    // Save to Firestore
+    await usersRef.doc(uid).set(userData, { merge: true });
 
-    console.log(`User saved to Firestore: ${name} (${uid})`);
-    res.status(200).send({ 
-      success: true, 
-      message: "User details saved permanently"
-    });
+    console.log(`User saved/updated in Firestore: ${name} (${uid})`);
+    res.status(200).send({ success: true, message: "User details saved permanently" });
   } catch (error) {
     console.error("Error storing user in Firestore:", error);
+    res.status(500).send({ success: false, error: error.message });
+  }
+});
+
+// Endpoint to delete a user by their FCM Token
+app.delete('/delete-user-by-token', authenticate, async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+
+    if (!fcmToken) {
+      return res.status(400).send({ success: false, error: "fcmToken is required to delete a user." });
+    }
+
+    const snapshot = await db.collection('users').where('fcmToken', '==', fcmToken).get();
+
+    if (snapshot.empty) {
+      return res.status(404).send({ success: false, error: "No user found with this FCM Token." });
+    }
+
+    // Delete all matching documents (usually there's only one)
+    const batch = db.batch();
+    snapshot.docs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+
+    res.status(200).send({ success: true, message: `Deleted ${snapshot.size} user(s) associated with this token.` });
+  } catch (error) {
     res.status(500).send({ success: false, error: error.message });
   }
 });
